@@ -1,0 +1,28 @@
+#!/bin/bash
+
+
+"C:\Program Files\ESI-OpenCFD\OpenFOAM\v2012\msys64\usr\bin\bash" --login -O expand_aliases -c echo Sourcing OpenFOAM environment...;
+source $HOME/OpenFOAM/OpenFOAM-v2012/etc/bashrc;
+export PATH=$FOAM_LIBBIN/msmpi:$FOAM_LIBBIN:$WM_THIRD_PARTY_DIR/platforms/linux64MingwDPInt32/lib:$PATH;
+
+pathsString=$(find "$(cd ..; pwd)" -name "case" -type d)
+paths=($pathsString)
+
+len="${#paths[@]}"
+
+crnt=0
+
+for i in "${paths[@]}";
+do
+  let crnt+=1
+  echo "Starting ${crnt} job of ${len}\n"
+  cd "$i" && ./Allrun;
+  wait;
+done
+
+if [ "$crnt" == "$len" ];
+  then
+    echo "\nSuccessful finished"
+  else
+    echo "\nSomething went wrong"
+fi
