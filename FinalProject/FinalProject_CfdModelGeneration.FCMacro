@@ -1,0 +1,292 @@
+import sys, os
+import numpy as np
+import glob
+import re
+
+models = glob.glob('C:\DataScience\Training\FinalProject\data\cad_models\*.step')
+
+for model in models:
+
+	model_name = os.path.splitext(os.path.basename(model))[0]
+	model_path = model.replace('\\', '/')
+	diameter = int(re.findall('\d+', model_name)[0])
+
+	# importing CAD model
+	FreeCAD.loadFile(model_path)
+
+	## setting job labels
+	FreeCAD.ActiveDocument.Label = model_name
+	FreeCAD.ActiveDocument.ActiveObject.Label = 'Pipe'
+
+	# getting faces type
+	faces = FreeCAD.ActiveDocument.ActiveObject.Shape.Faces
+
+	faces_param = {}
+
+	for i, face in enumerate(faces):
+		faces_param['Face'+str(i+1)] = {'area': round(face.Area, 0), 'z-coor': face.CenterOfMass.z}
+
+	cross_section_area = min([faces_param[key]['area'] for key in faces_param.keys()])
+
+	for key, value in faces_param.items():
+		if value['area'] == cross_section_area:
+			if value['z-coor'] == 0:
+				faces_param[key]['type'] = 'inlet'
+			else:
+				faces_param[key]['type'] = 'outlet'
+		else:
+			faces_param[key]['type'] = 'wall'
+    
+	# making CfdAnalysis
+	import CfdAnalysis
+	analysis = CfdAnalysis.makeCfdAnalysis('CfdAnalysis')
+	import CfdTools
+	CfdTools.setActiveAnalysis(analysis)
+
+	analysis.OutputPath = os.path.join('C:/DataScience/Training/FinalProject/data/cfd_models/openfoam/', model_name)
+    
+	# making CfdPhysicsSelection
+	import CfdPhysicsSelection
+	analysis.addObject(CfdPhysicsSelection.makeCfdPhysicsSelection())
+
+	## setting PhysicsModel
+	obj = FreeCAD.ActiveDocument.PhysicsModel
+	obj.Time = 'Steady'
+	obj.Phase = 'Single'
+	obj.Flow = 'Incompressible'
+	obj.Thermal = 'None'
+	obj.Turbulence = 'RANS'
+	obj.TurbulenceModel = 'kOmegaSST'
+	obj.gx = '0 mm/s^2'
+	obj.gy = '0 mm/s^2'
+	obj.gz = '0 mm/s^2'
+    
+	# making CfdFluidMaterial
+	import CfdFluidMaterial
+	analysis.addObject(CfdFluidMaterial.makeCfdFluidMaterial('FluidProperties'))
+
+	## setting MaterialProperties
+	FreeCAD.ActiveDocument.FluidProperties.Material = {'CardName': 'WaterIsothermal',
+												'AuthorAndLicense': 'Water',
+												'Name': 'Water',
+												'Type': 'Isothermal',
+												'Description': 'Standard distilled water properties at 20 Degrees Celsius and 1 atm',
+												'Density': '998 kg/m^3',
+												'DynamicViscosity': '1.003e-3 kg/m/s'}
+    
+	# making CfdInitialiseFlowField
+	import CfdInitialiseFlowField
+	analysis.addObject(CfdInitialiseFlowField.makeCfdInitialFlowField())
+
+	## setting InitialConditions
+	init = FreeCAD.ActiveDocument.InitialiseFields
+	init.PotentialFlow = True
+	init.UseInletUValues = False
+	init.Ux = '0.0 mm/s'
+	init.Uy = '0.0 mm/s'
+	init.Uz = '0.0 mm/s'
+	init.UseOutletPValue = False
+	init.PotentialFlowP = True
+	init.Pressure = '0.0 kg/(mm*s^2)'
+	init.VolumeFractions = {}
+	init.UseInletTemperatureValue = False
+	init.Temperature = '290.0 K'
+	init.UseInletTurbulenceValues = False
+	init.omega = '57.0 deg/s'
+	init.k = '10000.0 mm^2/s^2'
+	init.BoundaryU = None
+	init.BoundaryP = None
+	init.BoundaryT = None
+	init.BoundaryTurb = None
+
+	# making CfdSolver
+	import CfdSolverFoam
+	analysis.addObject(CfdSolverFoam.makeCfdSolverFoam())
+
+	## setting Parallelization
+	FreeCAD.ActiveDocument.CfdSolver.Parallel = True
+	FreeCAD.ActiveDocument.CfdSolver.ParallelCores = 15
+    
+	# making CfdMesh
+	import CfdMesh
+	CfdMesh.makeCfdMesh('Solid_Mesh')
+	App.ActiveDocument.ActiveObject.Part = App.ActiveDocument.Part__Feature
+
+	analysis.addObject(App.ActiveDocument.ActiveObject)
+
+	## setting MeshParameters
+	mesh_size = str(diameter/10) + ' mm'
+	FreeCAD.ActiveDocument.Solid_Mesh.CharacteristicLengthMax = mesh_size
+	FreeCAD.ActiveDocument.Solid_Mesh.MeshUtility = 'cfMesh'
+	FreeCAD.ActiveDocument.Solid_Mesh.ElementDimension = '3D'
+	FreeCAD.ActiveDocument.Solid_Mesh.CellsBetweenLevels = 3
+	FreeCAD.ActiveDocument.Solid_Mesh.EdgeRefinement = 1.0
+	FreeCAD.ActiveDocument.Solid_Mesh.PointInMesh = {'x': '0.0 mm', 'y': '0.0 mm', 'z': '0.0 mm'}
+    
+	# making CfdFluidBoundary for Inlet
+	import CfdFluidBoundary
+	analysis.addObject(CfdFluidBoundary.makeCfdFluidBoundary())
+
+	## setting BoundaryConditions
+	bc = FreeCAD.ActiveDocument.CfdFluidBoundary
+	bc.BoundaryType = 'inlet'
+	bc.BoundarySubType = 'volumetricFlowRateInlet'
+	bc.ThermalBoundaryType = 'fixedValue'
+	bc.VelocityIsCartesian = True
+	bc.Ux = '0.0 mm/s'
+	bc.Uy = '0.0 mm/s'
+	bc.Uz = '0.0 mm/s'
+	bc.VelocityMag = '0.0 mm/s'
+	bc.DirectionFace = ''
+	bc.ReverseNormal = True
+	bc.MassFlowRate = '0.0 kg/s'
+	bc.VolFlowRate = '830000.0 mm^3/s'
+	bc.Pressure = '0.0 kg/(mm*s^2)'
+	bc.SlipRatio = '0.0'
+	bc.Temperature = '290.0 K'
+	bc.HeatFlux = '0.0 kg/s^3'
+	bc.HeatTransferCoeff = '0.0 kg/(s^3*K)'
+	bc.TurbulenceInletSpecification = 'intensityAndLengthScale'
+	bc.TurbulentKineticEnergy = '10000.0 mm^2/s^2'
+	bc.SpecificDissipationRate = '57.0 deg/s'
+	bc.TurbulenceIntensity = '0.1'
+	bc.TurbulenceLengthScale = '100.0 mm'
+	bc.VolumeFractions = {}
+	bc.PorousBaffleMethod = 'porousCoeff'
+	bc.PressureDropCoeff = '0.0'
+	bc.ScreenWireDiameter = '0.2 mm'
+	bc.ScreenSpacing = '2.0 mm'
+	FreeCAD.ActiveDocument.CfdFluidBoundary.Label = 'inlet'
+
+	for key, value in faces_param.items():
+		if value['type'] == 'inlet':
+			inlet_face = key
+		else:
+			continue
+
+	FreeCAD.ActiveDocument.CfdFluidBoundary.ShapeRefs = [(FreeCAD.ActiveDocument.Part__Feature, (inlet_face))]
+
+	bc.DefaultBoundary = False
+	FreeCAD.ActiveDocument.recompute()
+    
+	# making CfdFluidBoundary for Outlet
+	analysis.addObject(CfdFluidBoundary.makeCfdFluidBoundary())
+
+	## setting BoundaryConditions
+	bc = FreeCAD.ActiveDocument.CfdFluidBoundary001
+	bc.BoundaryType = 'outlet'
+	bc.BoundarySubType = 'staticPressureOutlet'
+	bc.ThermalBoundaryType = 'fixedValue'
+	bc.VelocityIsCartesian = True
+	bc.Ux = '0.0 mm/s'
+	bc.Uy = '0.0 mm/s'
+	bc.Uz = '0.0 mm/s'
+	bc.VelocityMag = '0.0 mm/s'
+	bc.DirectionFace = ''
+	bc.ReverseNormal = False
+	bc.MassFlowRate = '0.0 kg/s'
+	bc.VolFlowRate = '0.0 mm^3/s'
+	bc.Pressure = '0.0 kg/(mm*s^2)'
+	bc.SlipRatio = '0.0'
+	bc.Temperature = '290.0 K'
+	bc.HeatFlux = '0.0 kg/s^3'
+	bc.HeatTransferCoeff = '0.0 kg/(s^3*K)'
+	bc.TurbulenceInletSpecification = 'intensityAndLengthScale'
+	bc.TurbulentKineticEnergy = '10000.0 mm^2/s^2'
+	bc.SpecificDissipationRate = '57.0 deg/s'
+	bc.TurbulenceIntensity = '0.1'
+	bc.TurbulenceLengthScale = '100.0 mm'
+	bc.VolumeFractions = {}
+	bc.PorousBaffleMethod = 'porousCoeff'
+	bc.PressureDropCoeff = '0.0'
+	bc.ScreenWireDiameter = '0.2 mm'
+	bc.ScreenSpacing = '2.0 mm'
+	FreeCAD.ActiveDocument.CfdFluidBoundary001.Label = 'outlet'
+
+	for key, value in faces_param.items():
+		if value['type'] == 'outlet':
+			outlet_face = key
+		else:
+			continue
+    
+	FreeCAD.ActiveDocument.CfdFluidBoundary001.ShapeRefs = [(FreeCAD.ActiveDocument.Part__Feature, (outlet_face))]
+
+	bc.DefaultBoundary = False
+	FreeCAD.ActiveDocument.recompute()
+
+	# making CfdFluidBoundary for Walls
+	analysis.addObject(CfdFluidBoundary.makeCfdFluidBoundary())
+
+	## setting BoundaryConditions
+	bc = FreeCAD.ActiveDocument.CfdFluidBoundary002
+	bc.BoundaryType = 'wall'
+	bc.BoundarySubType = 'fixedWall'
+	bc.ThermalBoundaryType = 'fixedValue'
+	bc.VelocityIsCartesian = True
+	bc.Ux = '0.0 mm/s'
+	bc.Uy = '0.0 mm/s'
+	bc.Uz = '0.0 mm/s'
+	bc.VelocityMag = '0.0 mm/s'
+	bc.DirectionFace = ''
+	bc.ReverseNormal = False
+	bc.MassFlowRate = '0.0 kg/s'
+	bc.VolFlowRate = '0.0 mm^3/s'
+	bc.Pressure = '0.0 kg/(mm*s^2)'
+	bc.SlipRatio = '0.0'
+	bc.Temperature = '290.0 K'
+	bc.HeatFlux = '0.0 kg/s^3'
+	bc.HeatTransferCoeff = '0.0 kg/(s^3*K)'
+	bc.TurbulenceInletSpecification = 'intensityAndLengthScale'
+	bc.TurbulentKineticEnergy = '10000.0 mm^2/s^2'
+	bc.SpecificDissipationRate = '57.0 deg/s'
+	bc.TurbulenceIntensity = '0.1'
+	bc.TurbulenceLengthScale = '100.0 mm'
+	bc.VolumeFractions = {}
+	bc.PorousBaffleMethod = 'porousCoeff'
+	bc.PressureDropCoeff = '0.0'
+	bc.ScreenWireDiameter = '0.2 mm'
+	bc.ScreenSpacing = '2.0 mm'
+	FreeCAD.ActiveDocument.CfdFluidBoundary002.Label = 'wall'
+	FreeCAD.ActiveDocument.CfdFluidBoundary002.ShapeRefs = []
+	bc.DefaultBoundary = True
+	FreeCAD.ActiveDocument.recompute()
+
+	# Refining CfdMesh
+	import CfdMeshRefinement
+	CfdMeshRefinement.makeCfdMeshRefinement(App.ActiveDocument.Solid_Mesh)
+
+	## setting RefiningParameters
+	FreeCAD.ActiveDocument.MeshRefinement.RelativeLength = 0.75
+	FreeCAD.ActiveDocument.MeshRefinement.RefinementThickness = '0.0 mm'
+	FreeCAD.ActiveDocument.MeshRefinement.NumberLayers = 3
+	FreeCAD.ActiveDocument.MeshRefinement.ExpansionRatio = 1.1
+	FreeCAD.ActiveDocument.MeshRefinement.FirstLayerHeight = '0.0 mm'
+	FreeCAD.ActiveDocument.MeshRefinement.RegionEdgeRefinement = 1.0
+	FreeCAD.ActiveDocument.MeshRefinement.Internal = False
+
+	wall_faces = []
+	for key, value in faces_param.items():
+		if value['type'] == 'wall':
+			wall_faces.append(key)
+		else:
+			continue
+
+	FreeCAD.ActiveDocument.MeshRefinement.ShapeRefs = [(FreeCAD.ActiveDocument.Part__Feature, tuple(wall_faces))]
+	FreeCAD.ActiveDocument.recompute()
+
+	# writing Mesh
+	import CfdMeshTools
+	FreeCAD.ActiveDocument.Solid_Mesh.Proxy.cart_mesh = CfdMeshTools.CfdMeshTools(FreeCAD.ActiveDocument.Solid_Mesh)
+	cart_mesh = FreeCAD.ActiveDocument.Solid_Mesh.Proxy.cart_mesh
+	cart_mesh.writeMesh()
+
+	# writing Case
+	import CfdCaseWriterFoam
+	FreeCAD.ActiveDocument.CfdSolver.Proxy.case_writer = CfdCaseWriterFoam.CfdCaseWriterFoam(FreeCAD.ActiveDocument.CfdAnalysis)
+	writer = FreeCAD.ActiveDocument.CfdSolver.Proxy.case_writer
+	writer.writeCase()
+
+
+	FreeCAD.ActiveDocument.saveAs(os.path.join('C:/DataScience/Training/FinalProject/data/cfd_models/freecad', model_name + '.FCStd'))
+
+	App.closeDocument(App.ActiveDocument.Name)
